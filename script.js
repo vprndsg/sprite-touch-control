@@ -7,19 +7,40 @@
   const ctx = canvas.getContext('2d', { alpha: true });
 
   // --- Game world constants ---
-  // Size of each grid cell in pixels. Walls occupy the outermost cells and
-  // floors fill the interior. The sprite's position is clamped so that its
-  // centre never enters the wall cells.
+  // Size of each grid cell in pixels. In the side‑scrolling version the
+  // world is a long horizontal strip composed of square cells. The
+  // character moves along the X axis while remaining on a single row.
   const cellSize = 80;
 
-  // Preload room assets. These are simple PNGs representing the floor and
-  // wall. Even though the images are larger than the cell size, they are
-  // scaled down when drawn. We don't wait for these to load explicitly
-  // because the browser will handle loading them asynchronously.
+  // World dimensions measured in cells. The map is WORLD_COLS cells wide
+  // and WORLD_ROWS cells tall. Increasing WORLD_COLS makes the world
+  // scroll horizontally; WORLD_ROWS controls vertical padding such as floor
+  // thickness and sky. The bottom row is the floor, and the top rows are
+  // empty air. You can adjust these numbers to create a longer or taller
+  // level.
+  const WORLD_COLS = 40;
+  const WORLD_ROWS = 6;
+
+  // Compute the ground Y coordinate: one row up from the bottom, plus half
+  // a cell. This is declared early so it is available to functions defined
+  // later (e.g. setTarget, clampToWorld). All sprite Y coordinates are
+  // clamped to this value so the character remains on the ground.
+  const groundY = (WORLD_ROWS - 2) * cellSize + cellSize / 2;
+
+  // Preload side‑scroller room assets. These PNGs represent the floor and
+  // wall in profile. They are scaled down when drawn. We load the side
+  // specific files rather than the original top‑down textures.
   const floorImg = new Image();
-  floorImg.src = 'images/floor.png';
+  floorImg.src = 'images/floor_side.png';
   const wallImg = new Image();
-  wallImg.src = 'images/wall.png';
+  wallImg.src = 'images/wall_side.png';
+
+  // Camera offsets. These values represent the upper‑left corner of the
+  // viewport in world coordinates and are updated each frame to follow
+  // the sprite. They are global so that the setTarget function can
+  // convert pointer positions into world coordinates.
+  let camX = 0;
+  let camY = 0;
 
   /**
    * Resize the canvas to match the window dimensions. This ensures the grid
@@ -100,10 +121,10 @@
   }
 
   // Sprite state variables
-  // Initial position at center of the canvas
-  let x = canvas.width / 2;
-  let y = canvas.height / 2;
-  // Target position that the sprite moves toward when the user taps
+  // Initial world position is placed near the centre of the first navigable row.
+  let x = (WORLD_COLS / 2) * cellSize;
+  let y = groundY;
+  // Target position that the sprite moves toward when the user taps.
   let targetX = x;
   let targetY = y;
   // Which direction the sprite is currently facing
@@ -134,41 +155,45 @@
   }
 
   /**
-   * Clamp a point to remain inside the room interior. The returned coordinates
-   * ensure the sprite's centre stays at least one cell away from the room edges.
+   * Clamp a proposed world coordinate to remain inside the world bounds.
+   * The sprite's X position is restricted to a range [cellSize, worldWidth - cellSize],
+   * leaving a one‑cell margin at each end. The Y coordinate is clamped to
+   * its initial floor row so the character never leaves the ground.
    *
-   * @param {number} tx Proposed x coordinate
-   * @param {number} ty Proposed y coordinate
-   * @returns {{x: number, y: number}} Clamped coordinates
+   * @param {number} tx Proposed X coordinate in world space
+   * @param {number} ty Proposed Y coordinate in world space
+   * @returns {{x: number, y: number}} Clamped world coordinates
    */
-  function clampToRoom(tx, ty) {
+  function clampToWorld(tx, ty) {
+    const worldWidth = WORLD_COLS * cellSize;
     const minX = cellSize;
-    const maxX = canvas.width - cellSize;
-    const minY = cellSize;
-    const maxY = canvas.height - cellSize;
-    return {
-      x: Math.min(Math.max(tx, minX), maxX),
-      y: Math.min(Math.max(ty, minY), maxY)
-    };
+    const maxX = worldWidth - cellSize;
+    const clampedX = Math.min(Math.max(tx, minX), maxX);
+    // Keep Y fixed at the ground row centre. We compute this once when
+    // initialising the sprite and return it here to avoid accidental drift.
+    return { x: clampedX, y: groundY };
   }
 
   /**
-   * Update target coordinates and initial facing when a pointer event occurs.
-   * This sets where the sprite should move and updates orientation.
+   * Convert a pointer event's screen coordinate into world coordinates and
+   * update the sprite's target. For the side‑scrolling view we only care
+   * about horizontal movement, so we ignore the Y component of the pointer
+   * and clamp the X coordinate within the world bounds. The facing is set
+   * based on the horizontal difference.
    *
    * @param {PointerEvent} e The pointer event
    */
   function setTarget(e) {
     const rect = canvas.getBoundingClientRect();
-    // Convert client coordinates to canvas coordinates and clamp to the room interior.
-    const proposedX = e.clientX - rect.left;
-    const proposedY = e.clientY - rect.top;
-    const clamped = clampToRoom(proposedX, proposedY);
+    const screenX = e.clientX - rect.left;
+    // Convert screenX to world coordinate by adding the current camera offset.
+    const worldX = camX + screenX;
+    // Clamp horizontal position inside world and fix vertical position on ground.
+    const clamped = clampToWorld(worldX, groundY);
     targetX = clamped.x;
     targetY = clamped.y;
     const dx = targetX - x;
-    const dy = targetY - y;
-    facing = determineFacing(dx, dy);
+    facing = dx >= 0 ? 'right' : 'left';
   }
 
   // Pointer event listeners
@@ -189,28 +214,24 @@
   });
 
   /**
-   * Move the sprite incrementally toward its target position. If the sprite
-   * is close enough to the target, snap directly to the target. The facing
-   * is updated continuously while moving.
+   * Move the sprite incrementally toward its target X coordinate. In the
+   * side‑scrolling world only horizontal movement is allowed, so we ignore
+   * differences in Y. The facing is set based on the direction of travel.
    */
   function updatePosition() {
     const dx = targetX - x;
-    const dy = targetY - y;
-    const distance = Math.hypot(dx, dy);
-    if (distance > 0) {
-      facing = determineFacing(dx, dy);
+    const absDx = Math.abs(dx);
+    if (absDx > 0) {
+      facing = dx >= 0 ? 'right' : 'left';
     }
-    if (distance > speed) {
-      const ratio = speed / distance;
-      x += dx * ratio;
-      y += dy * ratio;
+    if (absDx > speed) {
+      const sign = dx / absDx;
+      x += sign * speed;
     } else {
       x = targetX;
-      y = targetY;
     }
-    // Clamp the updated position to stay within the interior boundaries. This
-    // prevents the sprite from sliding underneath the walls.
-    const clamped = clampToRoom(x, y);
+    // Clamp to world bounds and fix Y.
+    const clamped = clampToWorld(x, y);
     x = clamped.x;
     y = clamped.y;
   }
@@ -227,44 +248,56 @@
    * height. The images are scaled to the current cell size.
    */
   function drawRoom() {
-    const rows = Math.ceil(canvas.height / cellSize);
-    const cols = Math.ceil(canvas.width / cellSize);
+    // Determine the range of columns and rows visible in the current viewport
+    // based on the camera offset. We pad by one tile on each side to avoid
+    // gaps when scrolling quickly.
+    const worldWidth = WORLD_COLS * cellSize;
+    const worldHeight = WORLD_ROWS * cellSize;
+    const startCol = Math.max(0, Math.floor(camX / cellSize) - 1);
+    const endCol = Math.min(WORLD_COLS - 1, Math.ceil((camX + canvas.width) / cellSize) + 1);
+    const startRow = Math.max(0, Math.floor(camY / cellSize) - 1);
+    const endRow = Math.min(WORLD_ROWS - 1, Math.ceil((camY + canvas.height) / cellSize) + 1);
+
     ctx.save();
-    // Draw each cell
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const xPos = col * cellSize;
-        const yPos = row * cellSize;
-        const isWall = row === 0 || row === rows - 1 || col === 0 || col === cols - 1;
+    for (let row = startRow; row <= endRow; row++) {
+      for (let col = startCol; col <= endCol; col++) {
+        const worldX = col * cellSize;
+        const worldY = row * cellSize;
+        const screenX = worldX - camX;
+        const screenY = worldY - camY;
+        const isFloorRow = row === WORLD_ROWS - 2;
+        const isWall = col === 0 || col === WORLD_COLS - 1;
         if (isWall) {
-          // Scale wall image to match the cell width. Preserve aspect ratio.
+          // Draw vertical walls on the far left and far right columns. The wall
+          // image may be taller than one cell, so we preserve its aspect ratio.
           const wallScale = cellSize / wallImg.width;
           const scaledHeight = wallImg.height * wallScale;
-          // Draw the wall so that its bottom aligns with the bottom of the cell.
           ctx.drawImage(
             wallImg,
             0,
             0,
             wallImg.width,
             wallImg.height,
-            xPos,
-            (row + 1) * cellSize - scaledHeight,
+            screenX,
+            worldY + cellSize - scaledHeight - camY,
             cellSize,
             scaledHeight
           );
-        } else {
-          // Tile floor over interior cells. Draw full image scaled to cell size.
+        } else if (isFloorRow) {
+          // Draw the floor tile on the designated floor row across all columns
           ctx.drawImage(
             floorImg,
             0,
             0,
             floorImg.width,
             floorImg.height,
-            xPos,
-            yPos,
+            screenX,
+            screenY,
             cellSize,
             cellSize
           );
+        } else {
+          // Empty space; no drawing necessary for air.
         }
       }
     }
@@ -298,7 +331,15 @@
       img = frames[frameIndex % frames.length];
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Draw the room before drawing the sprite.
+    // Update camera: centre on the sprite horizontally while clamping to world edges.
+    const worldWidth = WORLD_COLS * cellSize;
+    const worldHeight = WORLD_ROWS * cellSize;
+    camX = x - canvas.width / 2;
+    camY = y - canvas.height / 2;
+    // Clamp camera to world bounds
+    camX = Math.max(0, Math.min(camX, worldWidth - canvas.width));
+    camY = Math.max(0, Math.min(camY, worldHeight - canvas.height));
+    // Draw the visible portion of the world.
     drawRoom();
     // Always disable image smoothing for crisp pixel art
     ctx.imageSmoothingEnabled = false;
@@ -309,14 +350,16 @@
     const scale = 0.15;
     const drawW = img.width * scale;
     const drawH = img.height * scale;
+    const drawX = x - camX;
+    const drawY = y - camY;
     ctx.save();
     if (facing === 'left') {
       // Flip horizontally for left-facing orientation
-      ctx.translate(x, y);
+      ctx.translate(drawX, drawY);
       ctx.scale(-1, 1);
       ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
     } else {
-      ctx.drawImage(img, x - drawW / 2, y - drawH / 2, drawW, drawH);
+      ctx.drawImage(img, drawX - drawW / 2, drawY - drawH / 2, drawW, drawH);
     }
     ctx.restore();
     requestAnimationFrame(draw);
