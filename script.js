@@ -228,8 +228,11 @@
     drawGrid();
     // Always disable image smoothing for crisp pixel art
     ctx.imageSmoothingEnabled = false;
-    // Scale the sprite down to 40% (60% smaller)
-    const scale = 0.4;
+    // Scale the sprite down substantially so it appears small on mobile screens.
+    // The original frames are 1024×1536 pixels, which is too large for a phone display.
+    // A scale factor of 0.15 reduces each dimension to roughly 154×230 px (about 85% smaller),
+    // which feels more appropriate for a controllable character in a grid.
+    const scale = 0.15;
     const drawW = img.width * scale;
     const drawH = img.height * scale;
     ctx.save();
