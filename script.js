@@ -15,11 +15,15 @@
   // World dimensions measured in cells. The map is WORLD_COLS cells wide
   // and WORLD_ROWS cells tall. Increasing WORLD_COLS makes the world
   // scroll horizontally; WORLD_ROWS controls vertical padding such as floor
-  // thickness and sky. The bottom row is the floor, and the top rows are
-  // empty air. You can adjust these numbers to create a longer or taller
-  // level.
-  const WORLD_COLS = 40;
-  const WORLD_ROWS = 6;
+  // thickness and sky. The bottom row is kept empty to allow for
+  // off‑screen rendering, while the second‑to‑last row contains the
+  // floor the character walks on. Bump these values up to create a
+  // larger level that can scroll both horizontally and vertically. In
+  // the side‑scrolling view we choose a relatively long world and a
+  // tall sky so the environment fills the entire viewport on large
+  // mobile screens.
+  const WORLD_COLS = 60;
+  const WORLD_ROWS = 12;
 
   // Compute the ground Y coordinate: one row up from the bottom, plus half
   // a cell. This is declared early so it is available to functions defined
