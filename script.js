@@ -6,6 +6,21 @@
   // Enable alpha channel so transparency works
   const ctx = canvas.getContext('2d', { alpha: true });
 
+  // --- Game world constants ---
+  // Size of each grid cell in pixels. Walls occupy the outermost cells and
+  // floors fill the interior. The sprite's position is clamped so that its
+  // centre never enters the wall cells.
+  const cellSize = 80;
+
+  // Preload room assets. These are simple PNGs representing the floor and
+  // wall. Even though the images are larger than the cell size, they are
+  // scaled down when drawn. We don't wait for these to load explicitly
+  // because the browser will handle loading them asynchronously.
+  const floorImg = new Image();
+  floorImg.src = 'images/floor.png';
+  const wallImg = new Image();
+  wallImg.src = 'images/wall.png';
+
   /**
    * Resize the canvas to match the window dimensions. This ensures the grid
    * covers the entire viewport and the sprite remains centered initially.
@@ -119,6 +134,25 @@
   }
 
   /**
+   * Clamp a point to remain inside the room interior. The returned coordinates
+   * ensure the sprite's centre stays at least one cell away from the room edges.
+   *
+   * @param {number} tx Proposed x coordinate
+   * @param {number} ty Proposed y coordinate
+   * @returns {{x: number, y: number}} Clamped coordinates
+   */
+  function clampToRoom(tx, ty) {
+    const minX = cellSize;
+    const maxX = canvas.width - cellSize;
+    const minY = cellSize;
+    const maxY = canvas.height - cellSize;
+    return {
+      x: Math.min(Math.max(tx, minX), maxX),
+      y: Math.min(Math.max(ty, minY), maxY)
+    };
+  }
+
+  /**
    * Update target coordinates and initial facing when a pointer event occurs.
    * This sets where the sprite should move and updates orientation.
    *
@@ -126,8 +160,12 @@
    */
   function setTarget(e) {
     const rect = canvas.getBoundingClientRect();
-    targetX = e.clientX - rect.left;
-    targetY = e.clientY - rect.top;
+    // Convert client coordinates to canvas coordinates and clamp to the room interior.
+    const proposedX = e.clientX - rect.left;
+    const proposedY = e.clientY - rect.top;
+    const clamped = clampToRoom(proposedX, proposedY);
+    targetX = clamped.x;
+    targetY = clamped.y;
     const dx = targetX - x;
     const dy = targetY - y;
     facing = determineFacing(dx, dy);
@@ -170,30 +208,65 @@
       x = targetX;
       y = targetY;
     }
+    // Clamp the updated position to stay within the interior boundaries. This
+    // prevents the sprite from sliding underneath the walls.
+    const clamped = clampToRoom(x, y);
+    x = clamped.x;
+    y = clamped.y;
   }
 
   /**
    * Draw a simple rectangular grid on the canvas. Each cell is 80 pixels.
    * The background is white and grid lines are light grey to stay subtle.
    */
-  function drawGrid() {
-    const cellSize = 80;
+  /**
+   * Draw the room: floors fill the interior while walls occupy the
+   * outermost row and column of cells. The floor texture is tiled
+   * across every interior cell. Wall segments are drawn with their
+   * bottom aligned to the bottom of the wall cell to give a sense of
+   * height. The images are scaled to the current cell size.
+   */
+  function drawRoom() {
+    const rows = Math.ceil(canvas.height / cellSize);
+    const cols = Math.ceil(canvas.width / cellSize);
     ctx.save();
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#e0e0e0';
-    ctx.lineWidth = 1;
-    for (let gx = 0.5; gx <= canvas.width; gx += cellSize) {
-      ctx.beginPath();
-      ctx.moveTo(gx, 0);
-      ctx.lineTo(gx, canvas.height);
-      ctx.stroke();
-    }
-    for (let gy = 0.5; gy <= canvas.height; gy += cellSize) {
-      ctx.beginPath();
-      ctx.moveTo(0, gy);
-      ctx.lineTo(canvas.width, gy);
-      ctx.stroke();
+    // Draw each cell
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const xPos = col * cellSize;
+        const yPos = row * cellSize;
+        const isWall = row === 0 || row === rows - 1 || col === 0 || col === cols - 1;
+        if (isWall) {
+          // Scale wall image to match the cell width. Preserve aspect ratio.
+          const wallScale = cellSize / wallImg.width;
+          const scaledHeight = wallImg.height * wallScale;
+          // Draw the wall so that its bottom aligns with the bottom of the cell.
+          ctx.drawImage(
+            wallImg,
+            0,
+            0,
+            wallImg.width,
+            wallImg.height,
+            xPos,
+            (row + 1) * cellSize - scaledHeight,
+            cellSize,
+            scaledHeight
+          );
+        } else {
+          // Tile floor over interior cells. Draw full image scaled to cell size.
+          ctx.drawImage(
+            floorImg,
+            0,
+            0,
+            floorImg.width,
+            floorImg.height,
+            xPos,
+            yPos,
+            cellSize,
+            cellSize
+          );
+        }
+      }
     }
     ctx.restore();
   }
@@ -225,7 +298,8 @@
       img = frames[frameIndex % frames.length];
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawGrid();
+    // Draw the room before drawing the sprite.
+    drawRoom();
     // Always disable image smoothing for crisp pixel art
     ctx.imageSmoothingEnabled = false;
     // Scale the sprite down substantially so it appears small on mobile screens.
