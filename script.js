@@ -272,34 +272,40 @@
         const isFloorRow = row === WORLD_ROWS - 2;
         const isWall = col === 0 || col === WORLD_COLS - 1;
         if (isWall) {
-          // Draw vertical walls on the far left and far right columns. The wall
-          // image may be taller than one cell, so we preserve its aspect ratio.
-          const wallScale = cellSize / wallImg.width;
-          const scaledHeight = wallImg.height * wallScale;
-          ctx.drawImage(
-            wallImg,
-            0,
-            0,
-            wallImg.width,
-            wallImg.height,
-            screenX,
-            worldY + cellSize - scaledHeight - camY,
-            cellSize,
-            scaledHeight
-          );
+          // Draw vertical walls on the far left and far right columns. Only draw
+          // after the image has loaded to avoid division-by-zero errors when
+          // computing the scale.
+          if (wallImg.width > 0 && wallImg.height > 0) {
+            const wallScale = cellSize / wallImg.width;
+            const scaledHeight = wallImg.height * wallScale;
+            ctx.drawImage(
+              wallImg,
+              0,
+              0,
+              wallImg.width,
+              wallImg.height,
+              screenX,
+              worldY + cellSize - scaledHeight - camY,
+              cellSize,
+              scaledHeight
+            );
+          }
         } else if (isFloorRow) {
-          // Draw the floor tile on the designated floor row across all columns
-          ctx.drawImage(
-            floorImg,
-            0,
-            0,
-            floorImg.width,
-            floorImg.height,
-            screenX,
-            screenY,
-            cellSize,
-            cellSize
-          );
+          // Draw the floor tile on the designated floor row across all columns.
+          // Skip drawing until the texture has finished loading.
+          if (floorImg.width > 0 && floorImg.height > 0) {
+            ctx.drawImage(
+              floorImg,
+              0,
+              0,
+              floorImg.width,
+              floorImg.height,
+              screenX,
+              screenY,
+              cellSize,
+              cellSize
+            );
+          }
         } else {
           // Empty space; no drawing necessary for air.
         }
