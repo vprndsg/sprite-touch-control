@@ -95,18 +95,28 @@
   }
 
   // Object to hold processed images by orientation
-  const images = { front: [], back: [], side: [] };
-  // File names for each animation set
+  // Object to hold processed images by animation type. In addition to the
+  // cardinal walking directions we support a jump frame and a throw frame.
+  const images = { front: [], back: [], side: [], jump: [], throw: [] };
+  // File names for each animation set. Jump and throw animations are single
+  // frames depicting the character in mid‑action.
   const framePaths = {
     front: ['images/front1.jpeg', 'images/front2.jpeg', 'images/front3.jpeg'],
-    back:  ['images/back1.jpeg',  'images/back2.jpeg',  'images/back3.jpeg'],
-    side:  ['images/side1.jpeg',  'images/side2.jpeg'],
+    back: ['images/back1.jpeg', 'images/back2.jpeg', 'images/back3.jpeg'],
+    side: ['images/side1.jpeg', 'images/side2.jpeg'],
+    // Single frame animations for jumping and throwing. These assets must be
+    // provided in the images folder. If they are missing the corresponding
+    // arrays will remain empty and the default frames will be used instead.
+    jump: ['images/jump.png'],
+    throw: ['images/ninjastarthrow.png'],
   };
 
   // Load all frames and apply transparency. Once all frames are loaded
-  // and processed, the animation loop will begin.
+  // and processed, the animation loop will begin. We compute the total
+  // number of frames dynamically based on framePaths to support extra
+  // animation types.
   let loadedCount = 0;
-  const totalFrames = framePaths.front.length + framePaths.back.length + framePaths.side.length;
+  const totalFrames = Object.values(framePaths).reduce((sum, arr) => sum + arr.length, 0);
   function onFrameLoaded() {
     loadedCount++;
     if (loadedCount === totalFrames) {
@@ -141,6 +151,22 @@
   const speed = 5;
   // Whether a pointer (touch or mouse) is currently held down
   let pointerActive = false;
+
+  // Extra state for jump and throw actions. When jumping the sprite moves
+  // vertically with a velocity affected by gravity. When throwing the sprite
+  // plays a one‑off animation and spawns a projectile that travels forward.
+  let isJumping = false;
+  let vy = 0;
+  const gravity = 1.2;
+  const jumpStrength = 22;
+  let isThrowing = false;
+  let throwTimer = 0;
+  const throwDuration = 400; // ms the throw pose lasts
+  let lastTapTime = 0;
+  // Simple projectile representing the ninja star. It has a position and
+  // velocity in world space and a size for drawing. When inactive its
+  // active flag is false.
+  const star = { active: false, x: 0, y: 0, vx: 0, size: 0.4 * cellSize };
 
   /**
    * Given horizontal and vertical deltas, determine the appropriate facing.
@@ -202,8 +228,23 @@
 
   // Pointer event listeners
   canvas.addEventListener('pointerdown', (e) => {
-    pointerActive = true;
-    setTarget(e);
+    const now = performance.now();
+    const rect = canvas.getBoundingClientRect();
+    const sy = e.clientY - rect.top;
+    // Double‑tap detection for throw: if this tap occurs within 300 ms of the
+    // previous tap then trigger a throw. Otherwise, if the tap is in the upper
+    // third of the screen trigger a jump. Otherwise treat as a walk command.
+    if (now - lastTapTime < 300) {
+      startThrow();
+      pointerActive = false;
+    } else if (sy < canvas.height * 0.35) {
+      startJump();
+      pointerActive = false;
+    } else {
+      pointerActive = true;
+      setTarget(e);
+    }
+    lastTapTime = now;
   });
   canvas.addEventListener('pointermove', (e) => {
     if (pointerActive) {
@@ -216,6 +257,35 @@
   canvas.addEventListener('pointercancel', () => {
     pointerActive = false;
   });
+
+  /**
+   * Begin a jump if the sprite is currently on the ground and not already
+   * jumping. Sets the vertical velocity upward and flags the jumping state.
+   */
+  function startJump() {
+    if (!isJumping) {
+      isJumping = true;
+      vy = -jumpStrength;
+    }
+  }
+
+  /**
+   * Begin a throwing animation if not already throwing. Plays a short
+   * animation and spawns a projectile that travels horizontally in the
+   * direction the sprite is facing.
+   */
+  function startThrow() {
+    if (!isThrowing) {
+      isThrowing = true;
+      throwTimer = 0;
+      // Spawn a star slightly above the sprite's mid‑section. The star
+      // inherits the sprite's facing direction for its velocity.
+      star.active = true;
+      star.x = x;
+      star.y = y - cellSize * 0.3;
+      star.vx = facing === 'left' ? -12 : 12;
+    }
+  }
 
   /**
    * Move the sprite incrementally toward its target X coordinate. In the
@@ -238,6 +308,27 @@
     const clamped = clampToWorld(x, y);
     x = clamped.x;
     y = clamped.y;
+    // Update vertical motion for jump. Apply gravity while jumping and
+    // clamp to the ground when landing. Horizontal movement remains
+    // unaffected by vertical position.
+    if (isJumping) {
+      y += vy;
+      vy += gravity;
+      if (y >= groundY) {
+        y = groundY;
+        isJumping = false;
+        vy = 0;
+      }
+    }
+    // Update projectile motion. When active the star moves horizontally
+    // until it leaves the world or screen. Once off‑screen it becomes
+    // inactive and will not be drawn.
+    if (star.active) {
+      star.x += star.vx;
+      if (star.x < 0 || star.x > WORLD_COLS * cellSize) {
+        star.active = false;
+      }
+    }
   }
 
   /**
@@ -272,40 +363,34 @@
         const isFloorRow = row === WORLD_ROWS - 2;
         const isWall = col === 0 || col === WORLD_COLS - 1;
         if (isWall) {
-          // Draw vertical walls on the far left and far right columns. Only draw
-          // after the image has loaded to avoid division-by-zero errors when
-          // computing the scale.
-          if (wallImg.width > 0 && wallImg.height > 0) {
-            const wallScale = cellSize / wallImg.width;
-            const scaledHeight = wallImg.height * wallScale;
-            ctx.drawImage(
-              wallImg,
-              0,
-              0,
-              wallImg.width,
-              wallImg.height,
-              screenX,
-              worldY + cellSize - scaledHeight - camY,
-              cellSize,
-              scaledHeight
-            );
-          }
+          // Draw vertical walls on the far left and far right columns. The wall
+          // image may be taller than one cell, so we preserve its aspect ratio.
+          const wallScale = cellSize / wallImg.width;
+          const scaledHeight = wallImg.height * wallScale;
+          ctx.drawImage(
+            wallImg,
+            0,
+            0,
+            wallImg.width,
+            wallImg.height,
+            screenX,
+            worldY + cellSize - scaledHeight - camY,
+            cellSize,
+            scaledHeight
+          );
         } else if (isFloorRow) {
-          // Draw the floor tile on the designated floor row across all columns.
-          // Skip drawing until the texture has finished loading.
-          if (floorImg.width > 0 && floorImg.height > 0) {
-            ctx.drawImage(
-              floorImg,
-              0,
-              0,
-              floorImg.width,
-              floorImg.height,
-              screenX,
-              screenY,
-              cellSize,
-              cellSize
-            );
-          }
+          // Draw the floor tile on the designated floor row across all columns
+          ctx.drawImage(
+            floorImg,
+            0,
+            0,
+            floorImg.width,
+            floorImg.height,
+            screenX,
+            screenY,
+            cellSize,
+            cellSize
+          );
         } else {
           // Empty space; no drawing necessary for air.
         }
@@ -323,24 +408,42 @@
    */
   function draw(time) {
     updatePosition();
-    // Advance animation frame if enough time has passed
-    if (time - lastFrameTime > frameInterval) {
+    // Advance animation frame if enough time has passed. We store the previous
+    // timestamp to compute delta for throw timers.
+    const delta = time - lastFrameTime;
+    if (delta > frameInterval) {
       frameIndex++;
       lastFrameTime = time;
     }
-    // Select the correct image frame based on facing
+    // Clear the canvas and draw a sky background. A light blue fill gives
+    // the impression of an outdoor environment beyond the ground.
+    ctx.fillStyle = '#87ceeb';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Select the correct image frame based on the current state. Jump and
+    // throw take precedence over walking frames. If the jump or throw
+    // animations are missing they fall back to the directional sets.
     let img;
-    if (facing === 'right' || facing === 'left') {
-      const frames = images.side;
-      img = frames[frameIndex % frames.length];
-    } else if (facing === 'front') {
-      const frames = images.front;
-      img = frames[frameIndex % frames.length];
+    if (isThrowing && images.throw.length > 0) {
+      img = images.throw[0];
+      // Advance throw timer and reset state when finished
+      throwTimer += delta;
+      if (throwTimer > throwDuration) {
+        isThrowing = false;
+      }
+    } else if (isJumping && images.jump.length > 0) {
+      img = images.jump[0];
     } else {
-      const frames = images.back;
-      img = frames[frameIndex % frames.length];
+      if (facing === 'right' || facing === 'left') {
+        const frames = images.side;
+        img = frames[frameIndex % frames.length];
+      } else if (facing === 'front') {
+        const frames = images.front;
+        img = frames[frameIndex % frames.length];
+      } else {
+        const frames = images.back;
+        img = frames[frameIndex % frames.length];
+      }
     }
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
     // Update camera: centre on the sprite horizontally while clamping to world edges.
     const worldWidth = WORLD_COLS * cellSize;
     const worldHeight = WORLD_ROWS * cellSize;
@@ -354,9 +457,6 @@
     // Always disable image smoothing for crisp pixel art
     ctx.imageSmoothingEnabled = false;
     // Scale the sprite down substantially so it appears small on mobile screens.
-    // The original frames are 1024×1536 pixels, which is too large for a phone display.
-    // A scale factor of 0.15 reduces each dimension to roughly 154×230 px (about 85% smaller),
-    // which feels more appropriate for a controllable character in a grid.
     const scale = 0.15;
     const drawW = img.width * scale;
     const drawH = img.height * scale;
@@ -372,6 +472,24 @@
       ctx.drawImage(img, drawX - drawW / 2, drawY - drawH / 2, drawW, drawH);
     }
     ctx.restore();
+    // Draw the ninja star projectile if active. It is represented as a
+    // simple four‑pointed star. We scale the size relative to the cell
+    // size so it appears small but noticeable.
+    if (star.active) {
+      const screenX = star.x - camX;
+      const screenY = star.y - camY;
+      ctx.save();
+      ctx.fillStyle = '#cccccc';
+      const s = star.size * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(screenX, screenY - s);
+      ctx.lineTo(screenX + s, screenY);
+      ctx.lineTo(screenX, screenY + s);
+      ctx.lineTo(screenX - s, screenY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
     requestAnimationFrame(draw);
   }
 })();
